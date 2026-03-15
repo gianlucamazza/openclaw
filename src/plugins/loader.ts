@@ -7,6 +7,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { detectResourceProfile } from "../infra/platform-profile.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
@@ -52,7 +53,17 @@ export type PluginLoadOptions = {
   mode?: "full" | "validate";
 };
 
-const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 32;
+/** Adaptive plugin registry cache cap based on system resources. */
+function getMaxPluginRegistryCacheEntries(): number {
+  const profile = detectResourceProfile();
+  if (profile === "low") {
+    return 8;
+  }
+  if (profile === "standard") {
+    return 16;
+  }
+  return 32;
+}
 const registryCache = new Map<string, PluginRegistry>();
 const openAllowlistWarningCache = new Set<string>();
 
@@ -125,7 +136,10 @@ const resolvePluginSdkAliasFile = (params: {
 };
 
 const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
+  resolvePluginSdkAliasFile({
+    srcFile: "root-alias.cjs",
+    distFile: "root-alias.cjs",
+  });
 
 const resolveExtensionApiAlias = (params: { modulePath?: string } = {}): string | null => {
   try {
@@ -208,7 +222,9 @@ export const __testing = {
   resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
-  maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+  get maxPluginRegistryCacheEntries() {
+    return getMaxPluginRegistryCacheEntries();
+  },
 };
 
 function getCachedPluginRegistry(cacheKey: string): PluginRegistry | undefined {
@@ -227,7 +243,7 @@ function setCachedPluginRegistry(cacheKey: string, registry: PluginRegistry): vo
     registryCache.delete(cacheKey);
   }
   registryCache.set(cacheKey, registry);
-  while (registryCache.size > MAX_PLUGIN_REGISTRY_CACHE_ENTRIES) {
+  while (registryCache.size > getMaxPluginRegistryCacheEntries()) {
     const oldestKey = registryCache.keys().next().value;
     if (!oldestKey) {
       break;
@@ -277,7 +293,10 @@ function validatePluginConfig(params: {
 }): { ok: boolean; value?: Record<string, unknown>; errors?: string[] } {
   const schema = params.schema;
   if (!schema) {
-    return { ok: true, value: params.value as Record<string, unknown> | undefined };
+    return {
+      ok: true,
+      value: params.value as Record<string, unknown> | undefined,
+    };
   }
   const cacheKey = params.cacheKey ?? JSON.stringify(schema);
   const result = validateJsonSchemaValue({
@@ -286,7 +305,10 @@ function validatePluginConfig(params: {
     value: params.value ?? {},
   });
   if (result.ok) {
-    return { ok: true, value: params.value as Record<string, unknown> | undefined };
+    return {
+      ok: true,
+      value: params.value as Record<string, unknown> | undefined,
+    };
   }
   return { ok: false, errors: result.errors.map((error) => error.text) };
 }
@@ -576,7 +598,11 @@ function warnWhenAllowlistIsOpen(params: {
   pluginsEnabled: boolean;
   allow: string[];
   warningCacheKey: string;
-  discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
+  discoverablePlugins: Array<{
+    id: string;
+    source: string;
+    origin: PluginRecord["origin"];
+  }>;
 }) {
   if (!params.pluginsEnabled) {
     return;
